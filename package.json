@@ -1,5 +1,5 @@
 {
-  "name": "email-setup",
+  "name": "postamt",
   "version": "0.1.0",
   "description": "Email infrastructure and webmail for pfeiffer.rocks",
   "scripts": {

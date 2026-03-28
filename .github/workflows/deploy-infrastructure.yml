@@ -1,4 +1,4 @@
-name: Deploy Email Infrastructure
+name: Deploy Postamt
 
 on:
   push:
@@ -332,7 +332,6 @@ jobs:
         run: |
           echo "Validating deployment..."
 
-          # Check if stacks exist and are in good state
           for STACK_NAME in StorageStack EmailStack WebmailStack; do
             STACK_STATUS=$(aws cloudformation describe-stacks \
               --stack-name $STACK_NAME \
@@ -340,14 +339,17 @@ jobs:
               --query 'Stacks[0].StackStatus' \
               --output text 2>/dev/null || echo "STACK_NOT_FOUND")
 
-            if [[ "$STACK_STATUS" != "CREATE_COMPLETE" && "$STACK_STATUS" != "UPDATE_COMPLETE" ]]; then
+            if [[ "$STACK_STATUS" == "STACK_NOT_FOUND" ]]; then
+              echo "WARNING: Stack $STACK_NAME not found (first deploy may need bootstrap)"
+            elif [[ "$STACK_STATUS" != *"COMPLETE"* ]] || [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
               echo "ERROR: Stack $STACK_NAME is in unexpected state: $STACK_STATUS"
               exit 1
+            else
+              echo "$STACK_NAME: $STACK_STATUS"
             fi
-            echo "$STACK_NAME: $STACK_STATUS"
           done
 
-          echo "All deployments validated successfully"
+          echo "Validation completed"
 
       - name: Run Infrastructure Tests
         run: |

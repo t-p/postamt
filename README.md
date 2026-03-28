@@ -1,6 +1,8 @@
-# 📬 Email Infrastructure
+# 📬 Postamt
 
 Self-hosted email infrastructure for a custom domain, built entirely on AWS. Receives email via SES, stores raw RFC822 in S3, indexes metadata in DynamoDB, and serves a lightweight emergency webmail interface — all for under $5/month.
+
+*Postamt (German: post office) — because your email deserves its own address.*
 
 ## Architecture
 
