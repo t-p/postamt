@@ -34,6 +34,5 @@ new WebmailStack(app, 'WebmailStack', {
     region: 'eu-west-1'
   },
   description: 'Webmail interface for pfeiffer.rocks domain',
-  webmailBucket: storageStack.webmailBucket,
   domain: domain
 });

@@ -12,7 +12,6 @@ import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { Construct } from 'constructs';
 
 export interface WebmailStackProps extends cdk.StackProps {
-  webmailBucket: s3.Bucket;
   domain: string;
 }
 
@@ -20,21 +19,53 @@ export class WebmailStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: WebmailStackProps) {
     super(scope, id, props);
 
-    const { webmailBucket, domain } = props;
+    const { domain } = props;
     const webmailSubdomain = `webmail.${domain}`;
+    const emailBucketName = `email-storage-${domain.replace('.', '-')}-${this.account}`;
 
-    // SSL Certificate for CloudFront
-    const certificate = new acm.Certificate(this, 'WebmailCertificate', {
+    // Route 53 hosted zone (needed for DNS validation and alias record)
+    const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
+      domainName: domain,
+    });
+
+    // SSL Certificate for CloudFront (must be in us-east-1)
+    const certificate = new acm.DnsValidatedCertificate(this, 'WebmailCertificate', {
       domainName: webmailSubdomain,
-      validation: acm.CertificateValidation.fromDns(),
+      hostedZone: hostedZone,
+      region: 'us-east-1',
+    });
+
+    // CloudFront OAI for private S3 access
+    const oai = new cloudfront.OriginAccessIdentity(this, 'WebmailOAI');
+
+    // Webmail site bucket (in this stack to avoid cross-stack cyclic deps)
+    const siteBucket = new s3.Bucket(this, 'WebmailSiteBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+    siteBucket.grantRead(oai);
+
+    // Security headers
+    const securityHeaders = new cloudfront.ResponseHeadersPolicy(this, 'SecurityHeaders', {
+      securityHeadersBehavior: {
+        contentSecurityPolicy: {
+          contentSecurityPolicy: `default-src 'self'; connect-src 'self' https://*.execute-api.eu-west-1.amazonaws.com; frame-src 'self' blob:; style-src 'self' 'unsafe-inline'`,
+          override: true,
+        },
+        contentTypeOptions: { override: true },
+        frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
+        strictTransportSecurity: { accessControlMaxAge: cdk.Duration.days(365), includeSubdomains: true, override: true },
+      },
     });
 
     // CloudFront Distribution
     const distribution = new cloudfront.Distribution(this, 'WebmailDistribution', {
       defaultBehavior: {
-        origin: new origins.S3StaticWebsiteOrigin(webmailBucket),
+        origin: new origins.S3Origin(siteBucket, { originAccessIdentity: oai }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        responseHeadersPolicy: securityHeaders,
       },
       domainNames: [webmailSubdomain],
       certificate: certificate,
@@ -48,16 +79,13 @@ export class WebmailStack extends cdk.Stack {
       ],
     });
 
-    // API Gateway for backend functions
-    const api = new apigateway.RestApi(this, 'WebmailApi', {
-      restApiName: 'Webmail API',
-      description: 'API for webmail backend functions',
-      defaultCorsPreflightOptions: {
-        allowOrigins: [`https://${webmailSubdomain}`],
-        allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-        allowHeaders: ['Content-Type', 'Authorization'],
-      },
-    });
+    // Shared Lambda environment variables
+    const lambdaEnv = {
+      EMAIL_BUCKET: emailBucketName,
+      EMAIL_INDEX_TABLE: `email-index-${domain.replace('.', '-')}`,
+      FROM_ADDRESS: `thomas@${domain}`,
+      WEBMAIL_ORIGIN: `https://${webmailSubdomain}`,
+    };
 
     // Lambda execution role with S3 and SES permissions
     const lambdaRole = new iam.Role(this, 'WebmailLambdaRole', {
@@ -70,102 +98,86 @@ export class WebmailStack extends cdk.Stack {
           statements: [
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
-              actions: [
-                's3:GetObject',
-                's3:ListBucket',
-              ],
+              actions: ['s3:GetObject', 's3:ListBucket'],
               resources: [
-                `arn:aws:s3:::email-storage-*`,
-                `arn:aws:s3:::email-storage-*/*`,
+                `arn:aws:s3:::${emailBucketName}`,
+                `arn:aws:s3:::${emailBucketName}/*`,
               ],
             }),
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
-              actions: [
-                'ses:SendEmail',
-                'ses:SendRawEmail',
+              actions: ['ses:SendEmail', 'ses:SendRawEmail'],
+              resources: [`arn:aws:ses:${this.region}:${this.account}:identity/${domain}`],
+            }),
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: ['dynamodb:GetItem', 'dynamodb:Query'],
+              resources: [
+                `arn:aws:dynamodb:${this.region}:${this.account}:table/email-index-${domain.replace('.', '-')}`,
+                `arn:aws:dynamodb:${this.region}:${this.account}:table/email-index-${domain.replace('.', '-')}/index/*`,
               ],
-              resources: ['*'],
+            }),
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: ['secretsmanager:GetSecretValue'],
+              resources: [
+                `arn:aws:secretsmanager:${this.region}:${this.account}:secret:/webmail/*`,
+              ],
             }),
           ],
         }),
       },
     });
 
-    // Placeholder Lambda functions (will be implemented in Task 3)
+    const backendCode = lambda.Code.fromAsset('./backend');
+
     const authFunction = new lambda.Function(this, 'AuthFunction', {
-      runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
+      runtime: lambda.Runtime.PYTHON_3_11,
+      handler: 'auth.handler',
       role: lambdaRole,
-      code: lambda.Code.fromInline(`
-        exports.handler = async (event) => {
-          return {
-            statusCode: 200,
-            headers: {
-              'Access-Control-Allow-Origin': 'https://${webmailSubdomain}',
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ message: 'Auth endpoint - coming soon' }),
-          };
-        };
-      `),
+      code: backendCode,
+      environment: lambdaEnv,
+      timeout: cdk.Duration.seconds(10),
     });
 
     const listEmailsFunction = new lambda.Function(this, 'ListEmailsFunction', {
-      runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
+      runtime: lambda.Runtime.PYTHON_3_11,
+      handler: 'list_emails.handler',
       role: lambdaRole,
-      code: lambda.Code.fromInline(`
-        exports.handler = async (event) => {
-          return {
-            statusCode: 200,
-            headers: {
-              'Access-Control-Allow-Origin': 'https://${webmailSubdomain}',
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ message: 'List emails endpoint - coming soon' }),
-          };
-        };
-      `),
+      code: backendCode,
+      environment: lambdaEnv,
+      timeout: cdk.Duration.seconds(30),
     });
 
     const readEmailFunction = new lambda.Function(this, 'ReadEmailFunction', {
-      runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
+      runtime: lambda.Runtime.PYTHON_3_11,
+      handler: 'read_email.handler',
       role: lambdaRole,
-      code: lambda.Code.fromInline(`
-        exports.handler = async (event) => {
-          return {
-            statusCode: 200,
-            headers: {
-              'Access-Control-Allow-Origin': 'https://${webmailSubdomain}',
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ message: 'Read email endpoint - coming soon' }),
-          };
-        };
-      `),
+      code: backendCode,
+      environment: lambdaEnv,
+      timeout: cdk.Duration.seconds(30),
     });
 
     const sendEmailFunction = new lambda.Function(this, 'SendEmailFunction', {
-      runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
+      runtime: lambda.Runtime.PYTHON_3_11,
+      handler: 'send_email.handler',
       role: lambdaRole,
-      code: lambda.Code.fromInline(`
-        exports.handler = async (event) => {
-          return {
-            statusCode: 200,
-            headers: {
-              'Access-Control-Allow-Origin': 'https://${webmailSubdomain}',
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ message: 'Send email endpoint - coming soon' }),
-          };
-        };
-      `),
+      code: backendCode,
+      environment: lambdaEnv,
+      timeout: cdk.Duration.seconds(10),
     });
 
-    // API Gateway endpoints
+    // API Gateway
+    const api = new apigateway.RestApi(this, 'WebmailApi', {
+      restApiName: 'Webmail API',
+      description: 'API for webmail backend functions',
+      defaultCorsPreflightOptions: {
+        allowOrigins: [`https://${webmailSubdomain}`],
+        allowMethods: ['GET', 'POST', 'OPTIONS'],
+        allowHeaders: ['Content-Type', 'Authorization'],
+      },
+    });
+
     const auth = api.root.addResource('auth');
     auth.addMethod('POST', new apigateway.LambdaIntegration(authFunction));
 
@@ -176,10 +188,13 @@ export class WebmailStack extends cdk.Stack {
     const emailById = emails.addResource('{id}');
     emailById.addMethod('GET', new apigateway.LambdaIntegration(readEmailFunction));
 
-    // Route 53 DNS record
-    const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
-      domainName: domain,
+    // Rate limiting
+    const plan = api.addUsagePlan('WebmailUsagePlan', {
+      throttle: { rateLimit: 5, burstLimit: 10 },
     });
+    plan.addApiStage({ stage: api.deploymentStage });
+
+    // Route 53 DNS record
 
     new route53.ARecord(this, 'WebmailAliasRecord', {
       zone: hostedZone,
@@ -187,10 +202,14 @@ export class WebmailStack extends cdk.Stack {
       target: route53.RecordTarget.fromAlias(new targets.CloudFrontTarget(distribution)),
     });
 
-    // Deploy frontend files
+    // Deploy frontend files + inject API config
+    const apiConfig = `window.WEBMAIL_API_URL="${api.url}";`;
     new s3deploy.BucketDeployment(this, 'WebmailDeployment', {
-      sources: [s3deploy.Source.asset('./frontend')],
-      destinationBucket: webmailBucket,
+      sources: [
+        s3deploy.Source.asset('./frontend'),
+        s3deploy.Source.data('config.js', apiConfig),
+      ],
+      destinationBucket: siteBucket,
       distribution: distribution,
       distributionPaths: ['/*'],
     });

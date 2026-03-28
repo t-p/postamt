@@ -27,7 +27,6 @@ describe('Webmail Stack', () => {
     });
 
     stack = new WebmailStack(app, 'TestWebmailStack', {
-      webmailBucket: mockBucket,
       env: {
         account: '123456789012',
         region: 'eu-west-1',
