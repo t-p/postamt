@@ -331,6 +331,7 @@ jobs:
       - name: Post-deployment validation
         run: |
           echo "Validating deployment..."
+          echo "Caller identity: $(aws sts get-caller-identity --query Arn --output text)"
 
           for STACK_NAME in StorageStack EmailStack WebmailStack; do
             STACK_STATUS=$(aws cloudformation describe-stacks \
