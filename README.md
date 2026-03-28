@@ -56,8 +56,6 @@ Self-hosted email infrastructure for a custom domain, built entirely on AWS. Rec
 │       ├── storage-stack.ts    # S3 bucket, DynamoDB table, index Lambda
 │       ├── email-stack.ts      # SES, receipt rules, SMTP/sync IAM users
 │       └── webmail-stack.ts    # CloudFront, API Gateway, webmail Lambdas
-├── scripts/
-│   └── backfill_email_index.py # One-time DynamoDB backfill from S3
 └── infrastructure/scripts/
     ├── show-dns-config.sh      # Display required DNS records
     └── test-email-infrastructure.sh  # Post-deploy validation
@@ -168,21 +166,6 @@ npx cdk destroy WebmailStack  # Tear down (stateful resources retained)
 | TXT | `<domain>` | `v=spf1 include:amazonses.com ~all` |
 | CNAME | `<token>._domainkey.<domain>` | DKIM (3 records, AWS-managed) |
 | A | `webmail.<domain>` | CloudFront distribution (alias) |
-
-## Scripts
-
-```bash
-# Backfill DynamoDB index from existing S3 emails
-python3 -m venv .venv && source .venv/bin/activate
-pip install boto3
-python3 scripts/backfill_email_index.py
-
-# Show DNS configuration
-./infrastructure/scripts/show-dns-config.sh <domain>
-
-# Test infrastructure
-./infrastructure/scripts/test-email-infrastructure.sh <domain>
-```
 
 ## License
 
