@@ -85,9 +85,11 @@ graph TD
 npm install
 npm run build
 
-# Set secrets (generate your own)
-export JWT_SECRET=$(openssl rand -hex 32)
-export AUTH_SECRET=$(openssl rand -hex 16)
+# Store secrets in AWS Secrets Manager (first-time setup)
+aws secretsmanager create-secret --name /webmail/jwt-secret \
+  --secret-string "$(openssl rand -hex 32)"
+aws secretsmanager create-secret --name /webmail/auth-secret \
+  --secret-string "$(openssl rand -hex 16)"
 
 # Deploy all stacks
 npx cdk deploy --all --require-approval never
