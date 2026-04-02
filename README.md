@@ -6,23 +6,31 @@ Self-hosted email infrastructure for a custom domain, built entirely on AWS. Rec
 
 ## Architecture
 
-```
-                    ┌─────────────────────────────────────────────────┐
-                    │                    AWS (eu-west-1)              │
-                    │                                                 │
-  Incoming Email ──►│  SES ──► S3 (incoming/{messageId})              │
-                    │                │                                │
-                    │                ▼                                │
-                    │          Index Lambda ──► DynamoDB (email-index) │
-                    │                                                 │
-                    │  CloudFront ──► S3 (static frontend)            │
-                    │       │                                         │
-  Browser ─────────►│       └──► API Gateway ──► Lambda (Python)      │
-                    │                │               │                │
-                    │                │          S3 / DynamoDB / SES   │
-                    │                │                                │
-  IMAP Server ◄────│  S3 (sync via cronjob)                          │
-                    └─────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph AWS["AWS (eu-west-1)"]
+        SES[SES]
+        S3["S3 (incoming/{messageId})"]
+        IndexLambda[Index Lambda]
+        DynamoDB["DynamoDB (email-index)"]
+        CF[CloudFront]
+        S3Static["S3 (static frontend)"]
+        APIGW[API Gateway]
+        LambdaAPI["Lambda (Python)"]
+
+        SES --> S3
+        S3 --> IndexLambda
+        IndexLambda --> DynamoDB
+        CF --> S3Static
+        CF --> APIGW
+        APIGW --> LambdaAPI
+        LambdaAPI --> S3
+        LambdaAPI --> DynamoDB
+        LambdaAPI --> SES
+    end
+
+    Email[Incoming Email] --> SES
+    Browser --> CF
 ```
 
 ### Components
